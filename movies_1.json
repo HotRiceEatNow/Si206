@@ -1,0 +1,32 @@
+{
+    "Title": [
+        "Inception",
+        "The Matrix",
+        "Interstellar",
+        "Titanic"
+    ],
+    "Genre": [
+        "Sci-Fi",
+        "Sci-Fi",
+        "Sci-Fi",
+        "Romance"
+    ],
+    "Year": [
+        2010,
+        1999,
+        2014,
+        1997
+    ],
+    "Rating": [
+        8.8,
+        8.7,
+        8.6,
+        7.8
+    ],
+    "Actors": [
+        "Leonardo DiCaprio, Joseph Gordon-Levitt",
+        "Keanu Reeves, Laurence Fishburne",
+        "Matthew McConaughey, Anne Hathaway",
+        "Leonardo DiCaprio, Kate Winslet"
+    ]
+}
