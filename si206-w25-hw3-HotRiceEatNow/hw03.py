@@ -92,7 +92,7 @@ def main():
     ball.print_answer_frequencies()
 
     # now print the ball which has answer and equesiton
-   
+    print(ball)
 
 
 
