@@ -1,24 +1,27 @@
 """
 API Data Integration & Collection
 ---------------------------------
-This script fetches movie data from two sources:
+This script fetches movie data from three sources now:
   1) OMDb (Open Movie Database) API
   2) TMDb (The Movie Database) API
+  3) SerpApi (Showtimes from Google results)
 
 It stores the data into an SQLite database with these tables:
-  - Movies:   Basic info about the movie (title, year, IMDb ID, TMDb ID)
-  - OMDbData: Additional data from OMDb (genre, IMDb rating, etc.)
-  - TMDbData: Additional data from TMDb (popularity, vote count, average_vote, budget)
+  - Movies:       Basic info (title, year, IMDb ID, TMDb ID)
+  - OMDbData:     Additional data from OMDb (genre, rating, votes)
+  - TMDbData:     Additional data from TMDb (popularity, vote count, average_vote, budget)
+  - ShowtimesData:Showtimes info from SerpApi (slots_count per day)
 
 Incremental Fetch:
-    - Each run fetches up to 25 new movies from TMDb
+    - Each run fetches up to 25 new movies from TMDb's "popular" list
     - Inserts them if they do not already exist
     - Also fetches OMDb data by IMDb ID
+    - Fetches showtimes data from SerpApi for each movie title
     - By running repeatedly, you can gather >=100 rows total.
 
 Usage:
     1. Install 'requests' if not already: pip install requests
-    2. Update or set your API keys for OMDb and TMDb below (or as environment variables).
+    2. Update or set your API keys for OMDb, TMDb, and SerpApi below (or as environment variables).
     3. Run multiple times until you have enough data.
 """
 
@@ -26,12 +29,14 @@ import os
 import sqlite3
 import requests
 import time
+from datetime import date
 
 # --------------------------------------------------------------------
 # API KEYS (Replace with your actual keys or set environment variables)
 # --------------------------------------------------------------------
 OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "1ad61f09")
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "ab67f773b96f6a5c2a52209b77fdd8b5")
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "YOUR_SERPAPI_KEY")
 
 # --------------------------------------------------------------------
 # DATABASE CONFIG
@@ -41,9 +46,9 @@ DB_NAME = "movies.db"
 
 def create_database():
     """
-    Initializes the SQLite database and creates the necessary tables
+    Initializes the SQLite database and creates/updates the necessary tables
     if they do not exist. Also checks if 'budget' column exists in TMDbData,
-    and if not, it alters the table to add the budget column.
+    adding it if it's missing. Finally, creates ShowtimesData.
     """
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -76,7 +81,6 @@ def create_database():
     )
 
     # -- TMDbData table
-    # Initially includes columns: id, movie_id, popularity, vote_count, average_vote.
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS TMDbData (
@@ -90,13 +94,24 @@ def create_database():
         """
     )
 
-    # ------------------------------------------------
-    # ADD 'budget' column to TMDbData if it doesn't exist
-    # ------------------------------------------------
+    # -- Check/add 'budget' column to TMDbData if missing
     cur.execute("PRAGMA table_info(TMDbData)")
-    existing_columns = [row[1] for row in cur.fetchall()]  # row[1] = column name
+    existing_columns = [row[1] for row in cur.fetchall()]  # row[1] is column name
     if "budget" not in existing_columns:
         cur.execute("ALTER TABLE TMDbData ADD COLUMN budget INTEGER")
+
+    # -- ShowtimesData table for SerpApi showtimes
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ShowtimesData (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            movie_id INTEGER,
+            show_date TEXT,
+            slots_count INTEGER,
+            FOREIGN KEY(movie_id) REFERENCES Movies(id)
+        )
+        """
+    )
 
     conn.commit()
     conn.close()
@@ -308,10 +323,110 @@ def insert_omdb_data(movie_id, genre, imdb_rating, imdb_votes):
     conn.close()
 
 
+# --------------------------------------------------------------------
+# SERPAPI SHOWTIMES INTEGRATION
+# --------------------------------------------------------------------
+def fetch_showtime_slots(movie_title):
+    """
+    Calls SerpApi's Showtimes endpoint to scrape a movie's showtimes from Google.
+    We sum up the number of showtimes (slots) across all theaters for 'today'.
+
+    Returns an integer count of how many times the movie is playing
+    (slots_count) or 0 if none found.
+    NOTE: Actual usage may require more complex queries, location data, etc.
+    """
+    # Prepare the SerpApi request
+    # For better results, you may need 'location', 'hl', 'gl', 'start_date', etc.
+    url = "https://serpapi.com/search.json"
+    params = {
+        "engine": "google_showtimes",
+        "q": movie_title,           # The movie title
+        "api_key": SERPAPI_API_KEY,
+        # Add or adjust other params for location, date, language, etc.
+    }
+
+    response = requests.get(url, params=params)
+    if response.status_code != 200:
+        print(f"Error fetching showtime data from SerpApi for '{movie_title}' (status {response.status_code})")
+        return 0
+
+    data = response.json()
+
+    # 'showtimes' results often are nested. We'll attempt a simplified parse:
+    # see https://serpapi.com/showtimes-results for data structure details.
+    showtimes_results = data.get("showtimes", [])
+    total_slots = 0
+
+    for theater_info in showtimes_results:
+        # Each theater has a 'showing' list with times
+        # Example structure might be: 
+        # {
+        #   "cinema_name": "...",
+        #   "address": "...",
+        #   "showing": [
+        #       {
+        #          "date": "Fri, Apr 07",
+        #          "times": [
+        #              {"start_time": "4:00pm", "buy_links": [...]}, ...
+        #          ]
+        #       },
+        #       ...
+        #   ]
+        # }
+        for show_date_info in theater_info.get("showing", []):
+            # We might only sum for 'today' or all days.
+            # For demonstration, let's sum all future showtimes:
+            times_list = show_date_info.get("times", [])
+            total_slots += len(times_list)
+
+    return total_slots
+
+
+def insert_showtimes_data(movie_id, slots_count):
+    """
+    Inserts or updates the daily showtimes count in the ShowtimesData table
+    for the given movie_id. We'll store the date as 'today'.
+    If you'd like to store multiple days, you might expand this logic.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    today_str = date.today().isoformat()  # e.g. '2025-04-07'
+
+    # Check if we already inserted data for this movie/today
+    cur.execute(
+        "SELECT id FROM ShowtimesData WHERE movie_id = ? AND show_date = ?",
+        (movie_id, today_str)
+    )
+    row = cur.fetchone()
+
+    if row:
+        # Update existing record for today's date
+        cur.execute(
+            """
+            UPDATE ShowtimesData
+            SET slots_count = ?
+            WHERE movie_id = ? AND show_date = ?
+            """,
+            (slots_count, movie_id, today_str)
+        )
+    else:
+        # Insert new record
+        cur.execute(
+            """
+            INSERT INTO ShowtimesData (movie_id, show_date, slots_count)
+            VALUES (?, ?, ?)
+            """,
+            (movie_id, today_str, slots_count)
+        )
+
+    conn.commit()
+    conn.close()
+
+
 def show_data():
     """
-    Prints out the contents of the Movies, OMDbData, and TMDbData tables.
-    TMDbData now includes budget.
+    Prints out the contents of all tables, including the new ShowtimesData.
     """
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -329,10 +444,15 @@ def show_data():
         print(row)
 
     print("\n=== TMDbData Table ===")
-    # Now 6 columns: (id, movie_id, popularity, vote_count, average_vote, budget)
     cur.execute("SELECT * FROM TMDbData")
     tmdb_rows = cur.fetchall()
     for row in tmdb_rows:
+        print(row)
+
+    print("\n=== ShowtimesData Table ===")
+    cur.execute("SELECT * FROM ShowtimesData")
+    showtimes_rows = cur.fetchall()
+    for row in showtimes_rows:
         print(row)
 
     conn.close()
@@ -349,6 +469,7 @@ def main():
          * updates the Movies table
          * updates the TMDbData table (popularity, vote_count, avg_vote, budget)
          * calls OMDb if imdb_id is present to fill OMDbData
+         * calls SerpApi to get the daily showtimes slots_count
       - Prints the database tables
     """
     create_database()
@@ -376,10 +497,10 @@ def main():
         vote_count = movie.get("vote_count", 0)
         average_vote = movie.get("vote_average", 0.0)
 
-        # Use Movie Details endpoint for imdb_id & budget
+        # Use TMDb details for imdb_id & budget
         imdb_id, budget = get_tmdb_movie_details(tmdb_id)
 
-        # Insert basic movie info
+        # Insert/update Movies
         movie_id = insert_movie_if_not_exists(
             title=title,
             release_year=release_year,
@@ -387,10 +508,10 @@ def main():
             tmdb_id=tmdb_id
         )
 
-        # Insert or update TMDb data (including budget)
+        # Insert/update TMDbData
         insert_tmdb_data(movie_id, popularity, vote_count, average_vote, budget)
 
-        # If IMDb ID is available, fetch OMDb data
+        # If IMDb ID is available, fetch OMDb
         if imdb_id:
             omdb_info = fetch_omdb_data(imdb_id)
             if omdb_info is not None:
@@ -410,7 +531,11 @@ def main():
 
                 insert_omdb_data(movie_id, genre, imdb_rating, imdb_votes)
 
-        # Be kind to the API
+        # --- NEW: Fetch SerpApi showtimes (slots_count) for this movie title
+        slots_count = fetch_showtime_slots(title)
+        insert_showtimes_data(movie_id, slots_count)
+
+        # Be kind to the APIs
         time.sleep(0.3)
 
     set_last_page_retrieved(next_page)
