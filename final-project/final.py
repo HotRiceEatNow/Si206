@@ -1,7 +1,7 @@
 """
 API Data Integration & Collection
 ---------------------------------
-This script fetches movie data from three sources now:
+This script fetches movie data from three sources:
   1) OMDb (Open Movie Database) API
   2) TMDb (The Movie Database) API
   3) SerpApi (Showtimes from Google results)
@@ -36,7 +36,7 @@ from datetime import date
 # --------------------------------------------------------------------
 OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "1ad61f09")
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "ab67f773b96f6a5c2a52209b77fdd8b5")
-SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "YOUR_SERPAPI_KEY")
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY", "ec44919024d8492b657c179a691b512169778a1e5d8c4f34ae2d2738db9d6415")
 
 # --------------------------------------------------------------------
 # DATABASE CONFIG
@@ -48,7 +48,7 @@ def create_database():
     """
     Initializes the SQLite database and creates/updates the necessary tables
     if they do not exist. Also checks if 'budget' column exists in TMDbData,
-    adding it if it's missing. Finally, creates ShowtimesData.
+    adding it if it's missing, and ensures ShowtimesData exists.
     """
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -221,7 +221,7 @@ def insert_movie_if_not_exists(title, release_year, imdb_id, tmdb_id):
 
 def insert_tmdb_data(movie_id, popularity, vote_count, average_vote, budget):
     """
-    Inserts or updates data in the TMDbData table, including the new 'budget' field.
+    Inserts or updates data in the TMDbData table, including the 'budget' field.
     """
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
@@ -332,17 +332,29 @@ def fetch_showtime_slots(movie_title):
     We sum up the number of showtimes (slots) across all theaters for 'today'.
 
     Returns an integer count of how many times the movie is playing
-    (slots_count) or 0 if none found.
-    NOTE: Actual usage may require more complex queries, location data, etc.
+    (slots_count) or 0 if none found or if there's an error (HTTP 400, etc.).
+
+    NOTE: SerpApi requires certain parameters for 'google_showtimes':
+      - location, hl, gl, start_date, end_date, etc.
+      - If the movie is not in theaters (older or future release), we might get 0 slots.
     """
-    # Prepare the SerpApi request
-    # For better results, you may need 'location', 'hl', 'gl', 'start_date', etc.
+    # For demonstration, we use today's date for both start_date and end_date.
+    today_str = date.today().isoformat()  # e.g. '2025-04-09'
+
+    # Construct the search query (could also do e.g. f"{movie_title} movie times near me")
+    query_str = f"{movie_title} showtimes near me"
+
     url = "https://serpapi.com/search.json"
     params = {
         "engine": "google_showtimes",
-        "q": movie_title,           # The movie title
-        "api_key": SERPAPI_API_KEY,
-        # Add or adjust other params for location, date, language, etc.
+        "q": query_str,
+        "hl": "en",
+        "gl": "us",
+        "location": "New York,NY,USA",
+        "start_date": today_str,
+        "end_date": today_str,
+        "movie_times": "1",  # recommended for showtimes queries
+        "api_key": SERPAPI_API_KEY
     }
 
     response = requests.get(url, params=params)
@@ -352,30 +364,12 @@ def fetch_showtime_slots(movie_title):
 
     data = response.json()
 
-    # 'showtimes' results often are nested. We'll attempt a simplified parse:
-    # see https://serpapi.com/showtimes-results for data structure details.
+    # 'showtimes' results are often nested. We'll attempt a simplified parse:
     showtimes_results = data.get("showtimes", [])
     total_slots = 0
 
     for theater_info in showtimes_results:
-        # Each theater has a 'showing' list with times
-        # Example structure might be: 
-        # {
-        #   "cinema_name": "...",
-        #   "address": "...",
-        #   "showing": [
-        #       {
-        #          "date": "Fri, Apr 07",
-        #          "times": [
-        #              {"start_time": "4:00pm", "buy_links": [...]}, ...
-        #          ]
-        #       },
-        #       ...
-        #   ]
-        # }
         for show_date_info in theater_info.get("showing", []):
-            # We might only sum for 'today' or all days.
-            # For demonstration, let's sum all future showtimes:
             times_list = show_date_info.get("times", [])
             total_slots += len(times_list)
 
@@ -386,12 +380,11 @@ def insert_showtimes_data(movie_id, slots_count):
     """
     Inserts or updates the daily showtimes count in the ShowtimesData table
     for the given movie_id. We'll store the date as 'today'.
-    If you'd like to store multiple days, you might expand this logic.
     """
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    today_str = date.today().isoformat()  # e.g. '2025-04-07'
+    today_str = date.today().isoformat()
 
     # Check if we already inserted data for this movie/today
     cur.execute(
@@ -426,7 +419,7 @@ def insert_showtimes_data(movie_id, slots_count):
 
 def show_data():
     """
-    Prints out the contents of all tables, including the new ShowtimesData.
+    Prints out the contents of all tables, including the ShowtimesData.
     """
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
