@@ -136,7 +136,33 @@ def get_top_artists(db):
     Returns:
         dict: Dictionary with artist names as keys and play counts as values
     """
-    pass
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    
+    
+    cur.execute(
+        """
+        SELECT a.name AS artist_name, COUNT(l.id) AS play_count
+        FROM listening_history l
+        JOIN tracks t ON l.track_id = t.id
+        JOIN albums al ON t.album_id = al.id
+        JOIN artists a ON al.artist_id = a.id
+        GROUP BY artist_name
+        ORDER BY play_count DESC
+        LIMIT 5
+        """
+    )
+    
+    rows = cur.fetchall()
+    conn.close()
+    
+    # Build dictionary in descending order
+    top_artists_dict = {}
+    for artist_name, play_count in rows:
+        top_artists_dict[artist_name] = play_count
+    
+    return top_artists_dict
+
 
 
 def find_featured_artists(db):
