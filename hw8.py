@@ -174,7 +174,65 @@ def find_featured_artists(db):
     Returns:
         list: Sorted list of unique featured artists from Charli xcx's songs
     """
-    pass
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    
+    # Get the ID for "Charli xcx"
+    cur.execute("SELECT id FROM artists WHERE name = ?", ("Charli xcx",))
+    result = cur.fetchone()
+    if not result:
+        # If no "Charli xcx" at all, return empty
+        conn.close()
+        return []
+    charli_id = result[0]
+    
+    # Get all track names for Charli xcx that have "feat." or "featuring"
+    cur.execute(
+        """
+        SELECT t.name
+        FROM tracks t
+        JOIN albums al ON t.album_id = al.id
+        WHERE al.artist_id = ?
+          AND (t.name LIKE '%feat.%' OR t.name LIKE '%featuring%')
+        """,
+        (charli_id,)
+    )
+    
+    rows = cur.fetchall()
+    conn.close()
+    
+    featured_artists = set()
+    
+   
+    for (track_name,) in rows:
+        # search for all possible matches:
+        # 
+        # parse those pieces into separate artists.
+        
+        # Use regex to capture text after 'feat.' or 'featuring'
+        # 
+       
+        matches = re.findall(r'(?:feat\.|featuring)\s*(.*?)(?:\)|$)', track_name, flags=re.IGNORECASE)
+        
+        # Each item in matches is a chunk containing the artists
+        for chunk in matches:
+            
+            chunk = chunk.replace('&', ',')
+           
+            chunk = chunk.replace(' and ', ',')
+            
+            # Split by commas
+            sub_artists = [artist.strip() for artist in chunk.split(',')]
+            for sub in sub_artists:
+                if not sub:
+                    continue
+                # Convert sub to a nicer case form
+                
+                sub_titled = sub.title()
+                featured_artists.add(sub_titled)
+    
+    # Return a sorted list
+    return sorted(featured_artists)
 
 
 class TestSpotifyWrapped(unittest.TestCase):
