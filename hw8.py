@@ -81,7 +81,51 @@ def get_top_songs(db):
     Returns:
         dict: Dictionary with song names as keys and play counts as values
     """
-    pass
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    
+    # Query: get track name, artist name, and total plays
+    cur.execute(
+        """
+        SELECT t.name AS track_name, a.name AS artist_name, COUNT(l.id) AS play_count
+        FROM listening_history l
+        JOIN tracks t ON l.track_id = t.id
+        JOIN albums al ON t.album_id = al.id
+        JOIN artists a ON al.artist_id = a.id
+        GROUP BY track_name, artist_name
+        ORDER BY play_count DESC
+        LIMIT 5
+        """
+    )
+    
+    rows = cur.fetchall()
+    conn.close()
+    
+    # Build the dictionary in descending order
+    top_songs_dict = {}
+    for track_name, artist_name, play_count in rows:
+        top_songs_dict[track_name] = play_count
+    
+    # Create bar chart
+    # Sort again by descending just to be safe 
+    sorted_items = sorted(top_songs_dict.items(), key=lambda x: x[1], reverse=True)
+    song_names = [item[0] for item in sorted_items]
+    play_counts = [item[1] for item in sorted_items]
+    
+    plt.figure(figsize=(8, 6))
+    # Choose horizontal or vertical as you wish; example uses horizontal
+    plt.barh(song_names, play_counts, color='skyblue')
+    plt.gca().invert_yaxis()  # So the biggest bar is at the top
+    
+    plt.title("Top 5 Songs for 2025")
+    plt.xlabel("Play Count")
+    plt.ylabel("Song Name")
+    
+    plt.tight_layout()
+    plt.savefig("top_songs.png")
+    plt.close()
+    
+    return top_songs_dict
 
 def get_top_artists(db):
     """
