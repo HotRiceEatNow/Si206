@@ -12,7 +12,65 @@ def fix_charli_xcx_name(db):
     Args:
         db (str): Path to the SQLite database file
     """
-    pass
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    
+    # Check if there actually is a Charli XC entry
+    cur.execute("SELECT id FROM artists WHERE name = ?", ("Charli XCX",))
+    result_old = cur.fetchone()
+    if not result_old:
+        # If "Charli XCX" doesn't exist, nothing to do
+        conn.close()
+        return
+    charli_XCX_id = result_old[0]
+    
+    #Find or create "Charli xcx" entry
+    cur.execute("SELECT id FROM artists WHERE name = ?", ("Charli xcx",))
+    result_new = cur.fetchone()
+    if not result_new:
+        # If "Charli xcx" does not exist, create 
+        
+        cur.execute("INSERT INTO artists (name) VALUES (?)", ("Charli xcx",))
+        conn.commit()
+        cur.execute("SELECT id FROM artists WHERE name = ?", ("Charli xcx",))
+        result_new = cur.fetchone()
+    charli_xcx_id = result_new[0]
+    
+    # Fetch all albums belonging to "Charli XCX"
+    cur.execute("SELECT id, name FROM albums WHERE artist_id = ?", (charli_XCX_id,))
+    albums_old = cur.fetchall()
+    
+    # For each old album, see if there's an album with the same name for "Charli xcx"
+    for old_album_id, old_album_name in albums_old:
+        # Check if album already exists under "Charli xcx"
+        cur.execute(
+            "SELECT id FROM albums WHERE name = ? AND artist_id = ?",
+            (old_album_name, charli_xcx_id)
+        )
+        existing_album = cur.fetchone()
+        
+        if existing_album:
+            # update all tracks from the old album to the existing album
+            existing_album_id = existing_album[0]
+            cur.execute(
+                "UPDATE tracks SET album_id = ? WHERE album_id = ?",
+                (existing_album_id, old_album_id)
+            )
+            # Delete the old album
+            cur.execute("DELETE FROM albums WHERE id = ?", (old_album_id,))
+        else:
+            #  exist, just update its artist_id to "Charli xcx"’s id
+            cur.execute(
+                "UPDATE albums SET artist_id = ? WHERE id = ?",
+                (charli_xcx_id, old_album_id)
+            )
+    
+    #Finally, delete the "Charli XCX" artist entry
+    cur.execute("DELETE FROM artists WHERE id = ?", (charli_XCX_id,))
+    
+    conn.commit()
+    conn.close()
+
 
 def get_top_songs(db):
     """
